@@ -1,0 +1,72 @@
+/* MyWisper design tokens: minimal, monochrome, Geist. Shared by pill, preview and dashboard. */
+@font-face {
+  font-family: "Geist";
+  src: url("../../assets/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../../assets/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: block;
+}
+
+:root {
+  --font-sans: "Geist", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* dark (default; the floating pill and preview are always dark) */
+  --bg: #000000;
+  --bg-2: #0a0a0a;
+  --bg-3: #111111;
+  --line: #1f1f1f;
+  --line-2: #2e2e2e;
+  --fg: #ededed;
+  --fg-2: #a1a1a1;
+  --fg-3: #707070;
+  --invert-bg: #ededed;
+  --invert-fg: #0a0a0a;
+  --red: #ff4d4d;
+  --green: #3fcf8e;
+  --amber: #f5a524;
+  --blue: #3291ff;
+  --radius: 8px;
+  --radius-lg: 12px;
+  color-scheme: dark;
+}
+
+/* The dashboard follows the Windows light/dark setting. */
+@media (prefers-color-scheme: light) {
+  :root.follows-system {
+    --bg: #ffffff;
+    --bg-2: #fafafa;
+    --bg-3: #f2f2f2;
+    --line: #eaeaea;
+    --line-2: #d4d4d4;
+    --fg: #0a0a0a;
+    --fg-2: #666666;
+    --fg-3: #8f8f8f;
+    --invert-bg: #0a0a0a;
+    --invert-fg: #ffffff;
+    --red: #e5484d;
+    --green: #16a34a;
+    --amber: #d97706;
+    --blue: #0070f3;
+    color-scheme: light;
+  }
+}
+
+.mono { font-family: var(--font-mono); font-feature-settings: "tnum"; }
+
+kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px;
+  font: 500 11px/1 var(--font-mono); color: var(--fg-2);
+  border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg-2);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'">
+  <title>MyWisper preview</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body class="view-result">
+  <div class="card" id="card">
+
+    <!-- CONFIRM: "Use 'EOD report'?" -->
+    <section class="view" id="view-confirm">
+      <header>
+        <div class="titles"><span class="eyebrow mono">You said</span><strong class="said" id="confirmSaid"></strong></div>
+        <button class="icon" data-cmd="cancel" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <div class="confirm-body">
+        <p class="question">Use <b id="confirmName"></b>?</p>
+        <p class="extra" id="confirmExtraRow">Also: <span id="confirmExtra"></span></p>
+      </div>
+      <footer>
+        <span class="grow"></span>
+        <button class="ghost" data-cmd="no">No, choose another</button>
+        <button class="primary" data-cmd="yes">Yes, use it</button>
+      </footer>
+    </section>
+
+    <!-- PICK: list of saved prompts -->
+    <section class="view" id="view-pick">
+      <header>
+        <div class="titles"><span class="eyebrow mono">Choose a prompt</span><strong class="said" id="pickSaid"></strong></div>
+        <button class="icon" data-cmd="cancel" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <div class="pick-list" id="pickList"></div>
+      <footer>
+        <span class="grow"></span>
+        <button class="ghost" data-cmd="cancel">Cancel</button>
+      </footer>
+    </section>
+
+    <!-- RESULT -->
+    <section class="view" id="view-result">
+      <header>
+        <div class="titles">
+          <span class="eyebrow mono">Preview</span>
+          <strong id="title">Pro prompt</strong>
+        </div>
+        <span class="meta mono" id="meta"></span>
+        <button class="icon" data-cmd="cancel" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <details id="originalBox">
+        <summary><span>Selected text</span><span class="mono" id="originalCount"></span></summary>
+        <pre id="original"></pre>
+      </details>
+      <div class="result" id="resultBox">
+        <pre id="result"></pre>
+        <div class="loading" id="loading" hidden><span class="spinner"></span>Rewriting</div>
+      </div>
+      <footer>
+        <button class="ghost" data-cmd="retry"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>Try again</button>
+        <p class="status" id="status" role="status"></p>
+        <button class="ghost" data-cmd="cancel" id="closeBtn">Cancel</button>
+        <button class="ghost" data-cmd="copy" id="copyBtn">Copy</button>
+        <button class="primary" data-cmd="replace" id="replaceBtn">Replace selection</button>
+      </footer>
+    </section>
+
+  </div>
+  <script src="preview.js"></script>
+</body>
+</html>

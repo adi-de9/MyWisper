@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en" class="follows-system">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <title>MyWisper</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="bar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+        <span class="name">MyWisper</span>
+        <span class="slash">/</span>
+        <span class="crumb" id="crumb">Overview</span>
+      </div>
+      <div class="bar-right">
+        <span class="hint">Hold <kbd>Win</kbd><kbd>Ctrl</kbd> to talk</span>
+        <span class="key-status" id="keyStatus"></span>
+      </div>
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      <button data-tab="overview">Overview</button>
+      <button data-tab="history">History</button>
+      <button data-tab="prompts">Prompts</button>
+      <button data-tab="dictionary">Dictionary</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- OVERVIEW -->
+    <section id="tab-overview" class="tab">
+      <div class="page-head row">
+        <div>
+          <h1>Overview</h1>
+          <p id="ovSubtitle"></p>
+        </div>
+        <button id="todayEod" class="btn">Create today's EOD</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><span class="k">Words today</span><b id="stWordsToday">0</b><span class="s mono" id="stDictToday"></span></div>
+        <div class="stat"><span class="k">Total words</span><b id="stWordsTotal">0</b><span class="s mono" id="stDictTotal"></span></div>
+        <div class="stat"><span class="k">Speaking speed</span><b id="stWpm">–</b><span class="s mono">words / min</span></div>
+        <div class="stat"><span class="k">Response time</span><b id="stLatency">–</b><span class="s mono" id="stLatencySplit"></span></div>
+        <div class="stat"><span class="k">Time saved</span><b id="stSaved">–</b><span class="s mono" id="stSavedNote"></span></div>
+        <div class="stat"><span class="k">Cost this month</span><b id="stCost">$0.00</b><span class="s mono">estimated</span></div>
+      </div>
+
+      <div class="box">
+        <div class="box-head">
+          <div><h2>Groq free plan today</h2><p>How much of your daily limit MyWisper has used. Limits refill gradually over 24 hours.</p></div>
+        </div>
+        <div class="meters" id="usage"></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="box">
+          <div class="box-head"><h2>Words per day</h2><span class="mono dim">Last 30 days</span></div>
+          <div class="chart-box"><canvas id="chWords"></canvas></div>
+        </div>
+        <div class="box">
+          <div class="box-head"><h2>Response time</h2><span class="mono dim">Last 40 dictations</span></div>
+          <div class="chart-box"><canvas id="chLatency"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="tab-history" class="tab">
+      <div class="page-head row">
+        <h1>History</h1>
+        <div class="toolbar">
+          <div class="seg" id="kindFilter" role="group" aria-label="Filter">
+            <button data-kind="all" class="active">All</button>
+            <button data-kind="dictation">Dictation</button>
+            <button data-kind="transform">Rewrites</button>
+          </div>
+          <input id="search" type="search" placeholder="Search" aria-label="Search history">
+          <button id="clearAll" class="btn ghost danger">Clear all</button>
+        </div>
+      </div>
+      <div class="box flush">
+        <ul id="historyList" class="list"></ul>
+        <div id="historyEmpty" class="empty" hidden>
+          <p class="empty-title">Nothing here yet</p>
+          <p>Click into any text box, hold <kbd>Win</kbd><kbd>Ctrl</kbd> and speak. Or select text and click the MyWisper pill.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROMPTS -->
+    <section id="tab-prompts" class="tab">
+      <div class="page-head row">
+        <div>
+          <h1>Prompts</h1>
+          <p>Used when you select text and pick from the Rewrite menu, or say what to do, like "make EOD".</p>
+        </div>
+        <button id="newPrompt" class="btn">New prompt</button>
+      </div>
+
+      <div class="box card editor" id="promptEditor" hidden>
+        <div class="card-body">
+          <h2 id="editorTitle">New prompt</h2>
+          <div class="fields">
+            <label>Name
+              <input id="pName" placeholder="e.g. Jira ticket" maxlength="60">
+            </label>
+            <label>Short description
+              <input id="pDesc" placeholder="What it does. Helps MyWisper match what you say." maxlength="200">
+            </label>
+          </div>
+          <label class="field-block">Prompt
+            <textarea id="pText" class="mono" rows="14" placeholder="Tell the AI what to do with the selected text…"></textarea>
+          </label>
+          <p class="hint">Write <code class="mono">{date}</code> for today's date. You don't need to say where the text is or to output only the result; MyWisper adds that.</p>
+        </div>
+        <div class="card-foot">
+          <div class="inline">
+            <button id="pReset" class="btn ghost">Reset to default</button>
+            <button id="pDelete" class="btn ghost danger">Delete</button>
+          </div>
+          <div class="inline">
+            <button id="pCancel" class="btn ghost">Cancel</button>
+            <button id="pSave" class="btn">Save prompt</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="box flush">
+        <ul id="promptList" class="list prompts"></ul>
+      </div>
+    </section>
+
+    <!-- DICTIONARY -->
+    <section id="tab-dictionary" class="tab">
+      <div class="page-head">
+        <h1>Dictionary</h1>
+        <p>Teach MyWisper names and words so they're spelled your way. Changes save automatically.</p>
+      </div>
+      <div class="box">
+        <div class="box-head"><div><h2>Words and names</h2><p>Your name, company, products, slang.</p></div></div>
+        <form id="wordForm" class="inline">
+          <input id="wordInput" placeholder="Add a word, e.g. Aditya" autocomplete="off">
+          <button type="submit" class="btn">Add</button>
+        </form>
+        <div id="wordChips" class="chips"></div>
+      </div>
+      <div class="box">
+        <div class="box-head"><div><h2>Replacements</h2><p>Always type something else for what you say, e.g. "my whisper" becomes "MyWisper".</p></div></div>
+        <form id="replForm" class="inline">
+          <input id="replFrom" placeholder="When I say" autocomplete="off">
+          <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          <input id="replTo" placeholder="Type this" autocomplete="off">
+          <button type="submit" class="btn">Add</button>
+        </form>
+        <table class="repl"><tbody id="replBody"></tbody></table>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="tab">
+      <div class="page-head"><h1>Settings</h1><p>Changes save as soon as you make them.</p></div>
+
+      <div class="box card">
+        <div class="card-body">
+          <h2>Groq API key</h2>
+          <p>Used for speech-to-text and the AI cleanup. Get a free key at console.groq.com.</p>
+          <div class="inline">
+            <input id="keyInput" type="password" placeholder="Paste a new key (gsk_…)" autocomplete="off">
+            <button id="testKey" class="btn ghost">Test key</button>
+            <button id="saveKey" class="btn">Save key</button>
+          </div>
+        </div>
+        <div class="card-foot"><span>Saved key <code class="mono" id="keyMasked">none</code></span><span id="testResult" class="result"></span></div>
+      </div>
+
+      <div class="box card">
+        <div class="card-body">
+          <h2>Speech and AI models</h2>
+          <p>Faster models answer sooner; bigger ones write better.</p>
+          <div class="fields">
+            <label>Speech-to-text
+              <select id="sttModel">
+                <option value="whisper-large-v3">whisper-large-v3 (best for Hinglish)</option>
+                <option value="whisper-large-v3-turbo">whisper-large-v3-turbo (cheaper)</option>
+              </select>
+            </label>
+            <label>Cleanup of dictation
+              <select id="llmModel">
+                <option value="qwen/qwen3.8-27b">qwen3.8-27b (fastest)</option>
+                <option value="openai/gpt-oss-20b">gpt-oss-20b</option>
+                <option value="openai/gpt-oss-120b">gpt-oss-120b (smartest)</option>
+              </select>
+            </label>
+            <label>Rewrites of selected text
+              <select id="transformModel">
+                <option value="openai/gpt-oss-120b">gpt-oss-120b (best quality)</option>
+                <option value="openai/gpt-oss-20b">gpt-oss-20b (faster)</option>
+                <option value="qwen/qwen3.8-27b">qwen3.8-27b (fastest)</option>
+              </select>
+            </label>
+            <label>Language
+              <select id="language">
+                <option value="auto">Auto-detect (best for Hinglish)</option>
+                <option value="hi">Hindi</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="box card">
+        <div class="card-body">
+          <h2>Writing</h2>
+          <label class="toggle">
+            <input type="checkbox" id="smartFormat"><span class="switch"></span>
+            <span><b>Adapt formatting to the app</b><small>Email layout in Gmail and Outlook, casual in WhatsApp and Slack, clear prompts in ChatGPT, Claude and Cursor.</small></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="selectionTool"><span class="switch"></span>
+            <span><b>Show MyWisper when I select text</b><small>Pro prompt, polish, fix grammar and translate, with a preview before anything is replaced.</small></span>
+          </label>
+          <div class="fields">
+            <label>Never show the pill in these apps
+              <input id="excludedApps" placeholder="WindowsTerminal, cmd, photoshop">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="box card">
+        <div class="card-body">
+          <h2>Pill</h2>
+          <label class="toggle">
+            <input type="checkbox" id="showIdleLine"><span class="switch"></span>
+            <span><b>Show the idle line</b><small>A small bar that is always visible. It grows into the pill when you talk or select text, and hides while a fullscreen app is open.</small></span>
+          </label>
+          <div class="fields">
+            <label>Position on screen
+              <select id="pillPosition">
+                <option value="bottom">Bottom</option>
+                <option value="top">Top</option>
+              </select>
+            </label>
+            <label>Your typing speed, for "time saved"
+              <input id="typingWpm" type="number" min="10" max="200">
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="box card">
+        <div class="card-body">
+          <h2>Microphone</h2>
+          <p>Talk and watch the level. If it stays flat, allow microphone access in Windows Settings → Privacy → Microphone.</p>
+          <div class="inline">
+            <button id="micTest" class="btn ghost">Start test</button>
+            <div class="meter"><div id="micLevel"></div></div>
+          </div>
+        </div>
+        <div class="card-foot"><span>Your data lives in <code class="mono" id="dataDir"></code></span></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="settingsSaved" role="status" hidden>Saved</div>
+
+  <script src="../../node_modules/chart.js/dist/chart.umd.min.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
