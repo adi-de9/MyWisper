@@ -3,3 +3,8 @@ dist/
 .env
 *.webm
 aada
+src/main/oauth-client.json
+src/main/app-secrets.json
+functions/.secret.local
+firestore-debug.log
+firebase-debug.log

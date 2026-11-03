@@ -69,4 +69,8 @@ kbd {
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  /* Progress indicators keep moving (small, essential motion); otherwise the spinner freezes
+     with its arc at the top and the recording dot stops pulsing, which looks stuck. */
+  .spinner { animation-duration: 1s !important; animation-iteration-count: infinite !important; }
+  .dot, .mark { animation-duration: 1.2s !important; animation-iteration-count: infinite !important; }
 }

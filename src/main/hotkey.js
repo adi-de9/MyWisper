@@ -1,4 +1,5 @@
-// Watches the keyboard globally. Holding Win + Ctrl emits "start", releasing emits "stop".
+// Watches the keyboard globally. Holding Win + Ctrl emits "start", releasing emits "stop"
+// (or "tap" after a quick press, or "cancel" when another key joins in, e.g. Win + Ctrl + Left).
 // Electron's globalShortcut can't detect key-up or a modifier-only combo, so we use uiohook-napi.
 const { EventEmitter } = require('events');
 const { uIOhook, UiohookKey } = require('uiohook-napi');
@@ -57,7 +58,8 @@ class Hotkey extends EventEmitter {
   onUp(key) {
     this.down.delete(key);
     if (this.recording && !(this.isCtrl() && this.isWin())) {
-      this.finish(Date.now() - this.startedAt < MIN_HOLD_MS ? 'cancel' : 'stop');
+      // A quick tap is "tap" (starts/stops live typing when that's on), a real hold is "stop".
+      this.finish(Date.now() - this.startedAt < MIN_HOLD_MS ? 'tap' : 'stop');
     }
   }
 

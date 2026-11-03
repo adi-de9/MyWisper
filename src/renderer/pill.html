@@ -24,8 +24,8 @@
     .pill.no-anim, .pill.no-anim * { transition: none !important; }
     .pill > * { display: none; flex: none; }
 
-    /* idle: a small 40 × 7 bar */
-    .pill[data-state="idle"], .pill[data-state="off"] { width: 40px; height: 7px; padding: 0; border-color: rgba(255, 255, 255, .28);
+    /* idle: a small 40 × 9 bar */
+    .pill[data-state="idle"], .pill[data-state="off"] { width: 40px; height: 9px; padding: 0; border-color: rgba(255, 255, 255, .28);
       background: rgba(10, 10, 10, .72); box-shadow: 0 1px 4px rgba(0, 0, 0, .35); cursor: pointer; }
     .pill[data-state="off"] { opacity: 0; }
     /* hover on the bar: hint */
@@ -35,6 +35,9 @@
     .pill[data-state="hint"] kbd { margin: 0 1px; }
     /* recording */
     .pill[data-state="recording"] .dot, .pill[data-state="recording"] canvas, .pill[data-state="recording"] .timer { display: block; }
+    /* live typing: "Live" before the waveform (clicking the pill stops it) */
+    .pill[data-state="recording"][data-live] { cursor: pointer; }
+    .pill[data-state="recording"][data-live] .label { display: block; color: var(--fg-2); order: -1; }
     /* processing */
     .pill[data-state="processing"] .spinner, .pill[data-state="processing"] .label { display: block; }
     /* error / info message */

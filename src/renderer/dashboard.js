@@ -8,8 +8,6 @@ let dict = { words: [], replacements: {} };
 let kindFilter = 'all';
 const charts = {};
 
-// Groq free-plan daily limits (see console.groq.com/docs/rate-limits).
-const FREE_PLAN = { llmRequests: 1000, llmTokens: 200_000, sttRequests: 2000, audioSec: 28_800 };
 const TAB_NAMES = { overview: 'Overview', history: 'History', prompts: 'Prompts', dictionary: 'Dictionary', settings: 'Settings' };
 const ACTION_LABELS = { prompt: 'Pro prompt', polish: 'Polish', grammar: 'Fix grammar', translate: 'Translate', eod: 'EOD report' };
 const ICONS = {
@@ -101,40 +99,13 @@ function renderOverview() {
   }
   $('stSaved').textContent = totalWords ? fmtDuration(Math.max(0, totalWords / typingWpm - totalAudioMin)) : '–';
   $('stSavedNote').textContent = `vs typing at ${typingWpm} wpm`;
-  const cost = month.reduce((s, e) => s + (e.costUsd || 0), 0);
-  $('stCost').textContent = `$${cost.toFixed(cost > 0 && cost < 0.01 ? 4 : 2)}`;
+  $('stMonth').textContent = plural(month.filter(isDictation).length, 'dictation');
+  $('stMonthWords').textContent = `${fmtInt(month.reduce((n, e) => n + (e.words || 0), 0))} words`;
   $('ovSubtitle').textContent = ok.length
     ? `Last dictation ${fmtTime(ok[0].time).toLowerCase()}`
     : 'No dictations yet. Click into any text box, hold Win + Ctrl and speak.';
 
-  renderUsage();
   renderCharts(ok);
-}
-
-// Today's use against the Groq free-plan daily limits.
-function renderUsage() {
-  const now = new Date();
-  const today = historyData.filter((e) => sameDay(new Date(e.time), now));
-  const llmCalls = today.filter((e) => (e.promptTokens || 0) > 0).length;
-  const tokens = today.reduce((s, e) => s + (e.promptTokens || 0) + (e.completionTokens || 0), 0);
-  const sttCalls = today.filter((e) => isDictation(e) && (e.sttMs || 0) > 0).length;
-  const audio = today.filter(isDictation).reduce((s, e) => s + (e.audioSec || 0), 0);
-  const items = [
-    { name: 'AI requests', used: llmCalls, limit: FREE_PLAN.llmRequests, show: (n) => fmtInt(n) },
-    { name: 'AI tokens', used: tokens, limit: FREE_PLAN.llmTokens, show: fmtCompact },
-    { name: 'Whisper requests', used: sttCalls, limit: FREE_PLAN.sttRequests, show: (n) => fmtInt(n) },
-    { name: 'Audio', used: audio, limit: FREE_PLAN.audioSec, show: (s) => fmtDuration(s / 60) },
-  ];
-  $('usage').replaceChildren(...items.map((m) => {
-    const pct = Math.min(100, (m.used / m.limit) * 100);
-    const track = el('div', { className: `track${pct >= 95 ? ' full' : pct >= 75 ? ' warn' : ''}` }, el('div'));
-    track.firstChild.style.width = `${pct}%`;
-    const value = el('span', { className: 'mono' }, m.show(m.used), el('i', { textContent: ` / ${m.show(m.limit)}` }));
-    return el('div', { className: 'meter-item' },
-      el('div', { className: 'meter-top' }, el('span', { textContent: m.name }), value),
-      track,
-      el('small', { textContent: `${pct < 1 && m.used > 0 ? '<1' : Math.round(pct)}% used` }));
-  }));
 }
 
 function renderCharts(ok) {
@@ -219,7 +190,6 @@ function historyItem(e) {
     e.audioSec ? el('span', { textContent: `${e.audioSec.toFixed(1)}s audio` }) : null,
     e.words ? el('span', { textContent: `${e.words} words · ${e.wpm} wpm` }) : null,
     e.totalMs ? el('span', { textContent: isDictation(e) ? `${fmtSec(e.totalMs)} (whisper ${fmtSec(e.sttMs)}, ai ${fmtSec(e.llmMs)})` : fmtSec(e.totalMs) }) : null,
-    e.costUsd ? el('span', { textContent: `$${e.costUsd.toFixed(5)}` }) : null,
   );
 
   const details = (e.rawText || e.error) ? el('details', {},
@@ -360,58 +330,54 @@ $('todayEod').addEventListener('click', async () => {
 
 // ---------- settings ----------
 function renderSettings() {
-  $('keyMasked').textContent = cfg.hasKey ? cfg.keyMasked : 'none';
-  $('sttModel').value = cfg.sttModel;
-  $('llmModel').value = cfg.llmModel;
   $('language').value = cfg.language;
   $('typingWpm').value = cfg.typingWpm;
   $('pillPosition').value = cfg.pillPosition || 'bottom';
   $('smartFormat').checked = cfg.smartFormat !== false;
+  $('liveTyping').checked = cfg.liveTyping === true;
   $('selectionTool').checked = cfg.selectionTool !== false;
   $('showIdleLine').checked = cfg.showIdleLine !== false;
-  $('transformModel').value = cfg.transformModel;
   $('excludedApps').value = (cfg.excludedApps || []).join(', ');
   $('dataDir').textContent = cfg.dataDir;
+}
+
+// Today's use of the daily free limit (from the MyWisper server): top bar, Overview and Settings.
+async function renderUsage() {
+  const u = await api.getUsage();
+  if (!u) {
+    $('keyStatus').replaceChildren();
+    $('usageText').textContent = $('ovUsageText').textContent = 'Not available offline';
+    return;
+  }
+  const used = Math.min(u.audioSec, u.limitSec);
+  const full = u.audioSec >= u.limitSec;
+  const fmt = (s) => (s < 60 ? `${Math.round(s)} s` : `${Math.round(s / 60)} min`);
   const dot = el('span', { className: 'dot' });
-  dot.style.background = cfg.hasKey ? css('--green') : css('--red');
-  $('keyStatus').replaceChildren(dot, cfg.hasKey ? 'Groq connected' : 'Add your API key in Settings');
+  dot.style.background = full ? css('--red') : css('--green');
+  $('keyStatus').replaceChildren(dot, full ? 'Daily limit reached' : `${fmt(used)} of ${fmt(u.limitSec)} today`);
+  $('usageFill').style.width = `${(used / u.limitSec) * 100}%`;
+  $('usageFill').parentElement.classList.toggle('full', full);
+  $('usageText').textContent = `${fmt(used)} of ${fmt(u.limitSec)} used today`;
+  const reset = `Resets ${new Date(u.resetAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`;
+  $('usageReset').textContent = $('ovUsageReset').textContent = reset;
+  $('ovUsageText').textContent = full ? 'Daily free limit reached' : `${fmt(used)} of ${fmt(u.limitSec)} used`;
+  $('ovUsageText').classList.toggle('full', full);
+  $('ovUsageFill').style.width = `${(used / u.limitSec) * 100}%`;
+  $('ovUsageFill').parentElement.classList.toggle('full', full);
 }
-
-function showResult(ok, msg) {
-  $('testResult').className = `result ${ok ? 'ok' : 'bad'}`;
-  $('testResult').textContent = msg;
-}
-
-$('testKey').addEventListener('click', async () => {
-  showResult(true, 'Testing…');
-  const r = await api.testApi($('keyInput').value.trim());
-  if (!r.ok) return showResult(false, `Key didn't work: ${r.error}`);
-  const missing = ['whisper-large-v3', cfg.llmModel, cfg.transformModel].filter((m) => !r.models.includes(m));
-  showResult(!missing.length, missing.length
-    ? `Key works, but these models aren't available: ${missing.join(', ')}`
-    : `Key works. Groq answered in ${r.ms} ms.`);
-});
-
-$('saveKey').addEventListener('click', async () => {
-  const key = $('keyInput').value.trim();
-  if (!key) return showResult(false, 'Paste a key first.');
-  const r = await api.testApi(key);
-  if (!r.ok) return showResult(false, `Not saved. The key didn't work: ${r.error}`);
-  await api.saveConfig({ groqApiKey: key });
-  $('keyInput').value = '';
-  cfg = await api.getConfig();
-  renderSettings();
-  showResult(true, 'Key tested and saved.');
-});
+renderUsage();
+setInterval(renderUsage, 60_000);
+api.onHistoryChanged(() => setTimeout(renderUsage, 500));
 
 const SETTING_VALUE = {
   typingWpm: (input) => Math.max(10, Number(input.value) || 40),
   smartFormat: (input) => input.checked,
+  liveTyping: (input) => input.checked,
   showIdleLine: (input) => input.checked,
   selectionTool: (input) => input.checked,
   excludedApps: (input) => input.value.split(',').map((s) => s.trim()).filter(Boolean),
 };
-for (const id of ['sttModel', 'llmModel', 'language', 'typingWpm', 'pillPosition', 'smartFormat', 'selectionTool', 'transformModel', 'excludedApps', 'showIdleLine']) {
+for (const id of ['language', 'typingWpm', 'pillPosition', 'smartFormat', 'liveTyping', 'selectionTool', 'excludedApps', 'showIdleLine']) {
   $(id).addEventListener('change', async () => {
     const value = SETTING_VALUE[id] ? SETTING_VALUE[id]($(id)) : $(id).value;
     await api.saveConfig({ [id]: value });
@@ -462,6 +428,53 @@ async function load() {
   renderDictionary();
 }
 
+// ---------- account ----------
+function renderAccount({ user, online, sync }) {
+  $('signin').hidden = !!user;
+  $('account').hidden = !user;
+  if (!user) { $('accountMenu').hidden = true; return; }
+  const initial = (user.name || user.email || '?').trim()[0].toUpperCase();
+  $('accAvatar').textContent = user.photo ? '' : initial;
+  $('accAvatar').style.backgroundImage = user.photo ? `url("${user.photo}")` : '';
+  $('accEmail').textContent = user.email || '';
+  $('accEmail2').textContent = user.email || '';
+  $('accName').textContent = user.name || 'Signed in';
+  const problem = sync === 'mismatch' || sync === 'error';
+  $('accSync').classList.toggle('on', online && sync === 'ok');
+  $('accSync').classList.toggle('warn', problem);
+  $('accSync').title = problem ? 'Sync stopped' : online ? 'Synced (encrypted)' : 'Offline – will sync when connected';
+  $('accSyncText').textContent = sync === 'mismatch'
+    ? 'Sync stopped: this PC has a different encryption key (MYWISPER_DATA_SECRET) than your other devices.'
+    : sync === 'error' ? 'Sync stopped: the encryption key is missing.'
+      : online ? 'History, prompts and dictionary sync with your other devices, encrypted.'
+        : 'Offline. Changes will sync when you are connected.';
+}
+
+$('account').addEventListener('click', (e) => { e.stopPropagation(); $('accountMenu').hidden = !$('accountMenu').hidden; });
+document.addEventListener('click', (e) => { if (!$('accountMenu').contains(e.target)) $('accountMenu').hidden = true; });
+$('signOutBtn').addEventListener('click', async () => {
+  $('accountMenu').hidden = true;
+  await api.signOut();
+});
+$('deleteCloudBtn').addEventListener('click', async () => {
+  $('accountMenu').hidden = true;
+  if (!confirm('Delete all your synced history, prompts and dictionary from the cloud?\n\nEverything on this PC stays. Your other devices keep their own copies. Sync stays off until you sign in again.')) return;
+  const r = await api.deleteCloudData();
+  toast(r.ok ? `Deleted ${r.count} item(s) from the cloud` : `Couldn't delete: ${r.error}`);
+});
+$('signInBtn').addEventListener('click', async () => {
+  const status = $('signInStatus');
+  $('signInBtn').disabled = true;
+  status.className = 'signin-status';
+  status.textContent = 'Finish signing in in your browser…';
+  const r = await api.signIn();
+  $('signInBtn').disabled = false;
+  if (!r.ok) { status.className = 'signin-status error'; status.textContent = r.error; }
+  else status.textContent = '';
+});
+
+api.onAccount((acc) => { renderAccount(acc); load(); renderUsage(); });
+api.getAccount().then(renderAccount);
 api.onHistoryChanged(load);
 showTab(location.hash.slice(1) || 'overview');
 load();

@@ -34,6 +34,14 @@ Spoken commands: comma, full stop / period, question mark, exclamation mark, col
 - Notion / Google Docs / Word: proper paragraphs and headings
 - VS Code / JetBrains: plain text, code names kept exactly
 
+**Live typing** (Settings → "Live typing", off by default):
+1. **Tap** Win + Ctrl (press and let go) and keep talking. The pill shows "Live".
+2. Each time you pause (~0.7 s), that sentence is cleaned up and typed, while you go on speaking.
+3. Tap Win + Ctrl again, press **Esc** or click the pill to stop. It also stops after a minute of silence.
+
+Holding Win + Ctrl still works as before (everything is typed at the end). Each sentence is cleaned on its own,
+so "scratch that" and spoken lists only work within one sentence; use the normal hold for those.
+
 ## The pill
 A small **idle line** (40 × 5 px) always sits at the bottom of the screen (or top, per Settings):
 - **Hover** it to see "Hold Win + Ctrl to talk"; **click** it to open the dashboard.
@@ -86,7 +94,7 @@ Environment switches for testing:
 - `MYWISPER_NOPASTE=1`: log the text instead of typing it
 - `MYWISPER_NO_UIA=1`: ignore UI Automation, so the Ctrl+C path gets exercised
 
-The Groq API key is read from `.env` (`GROQ_API_KEY=...`) the first time you run the app, then saved to `%APPDATA%\MyWisper\config.json`. `.env` is never packed into the installer.
+Speech and text go through the MyWisper server (`functions/`), which holds the Groq key and gives every account 15 minutes of speech a day; see docs/FIREBASE_SETUP.md step 7. `MYWISPER_API_BASE=<url>` points the app at another server (e.g. the local emulator). `.env` is never packed into the installer.
 
 ## Project layout
 | File | What it does |

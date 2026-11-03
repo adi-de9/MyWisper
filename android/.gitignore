@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.keystore
+*.jks
+.idea/
+*.iml
+# generated from ../src/main/prompts.js by ../scripts/export-mobile-prompts.js
+app/src/main/assets/prompts.json
+keystore.properties
+app/google-services.json

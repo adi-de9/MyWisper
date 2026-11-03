@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('mywisper', {
   onPillLayout: on('pill:layout'),
   onPillMenu: on('pill:menu'),
   sendAudio: (payload) => ipcRenderer.send('record:audio', payload),
+  onLiveStart: on('live:start'),
+  onLiveStop: on('live:stop'),
+  sendLiveSentence: (payload) => ipcRenderer.send('live:sentence', payload),
   setPillSize: (size) => ipcRenderer.send('pill:size', size),
 
   // preview window
@@ -28,7 +31,7 @@ contextBridge.exposeInMainWorld('mywisper', {
   saveDictionary: (d) => ipcRenderer.invoke('dict:save', d),
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: (c) => ipcRenderer.invoke('config:save', c),
-  testApi: (key) => ipcRenderer.invoke('api:test', key),
+  getUsage: () => ipcRenderer.invoke('usage:get'),
   copyText: (text) => ipcRenderer.invoke('clipboard:copy', text),
   listPrompts: () => ipcRenderer.invoke('prompts:list'),
   savePrompt: (p) => ipcRenderer.invoke('prompts:save', p),
@@ -36,4 +39,9 @@ contextBridge.exposeInMainWorld('mywisper', {
   removePrompt: (id) => ipcRenderer.invoke('prompts:remove', id),
   resetPrompt: (id) => ipcRenderer.invoke('prompts:reset', id),
   createTodayEod: () => ipcRenderer.invoke('eod:today'),
+  getAccount: () => ipcRenderer.invoke('auth:get'),
+  signIn: () => ipcRenderer.invoke('auth:signin'),
+  signOut: () => ipcRenderer.invoke('auth:signout'),
+  deleteCloudData: () => ipcRenderer.invoke('sync:deleteCloud'),
+  onAccount: on('auth:changed'),
 });

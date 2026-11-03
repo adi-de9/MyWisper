@@ -1,19 +1,46 @@
 // All calls to the Groq API live here: speech-to-text (Whisper), text cleanup (LLM) and the key test.
+// The app goes through the MyWisper server (functions/), which holds the Groq key and counts each user's
+// daily free limit: useServer() tells this file where it is and how to get the user's sign-in token.
+// Passing an apiKey instead talks to Groq directly (scripts/test-api.js).
 // This file does not use Electron, so scripts/test-api.js can use it too.
 const Groq = require('groq-sdk');
 const { toFile } = require('groq-sdk');
 const { cleanupSystemPrompt, MATCH_SYSTEM } = require('./prompts');
 
-// Whisper sometimes "hears" these phrases in silence/noise. Dropped only when little voice was detected.
-const HALLUCINATIONS = [
-  'thank you', 'thank you.', 'thanks for watching', 'thanks for watching!', 'thank you for watching',
-  'you', 'bye', 'bye.', '.', 'subtitles by the amara.org community', 'please subscribe',
-  'thank you for watching.', 'okay.', 'obrigado.',
+// Whisper "hears" these in silence or background noise (it was trained on video subtitles).
+// Compared without case and punctuation. ALWAYS: nobody dictates these, so they're always dropped.
+// HALLUCINATIONS: real words too, so they're only dropped when little voice was detected.
+const HALLUCINATIONS_ALWAYS = [
+  'thanks for watching', 'thank you for watching', 'thank you so much for watching', 'please subscribe',
+  'subtitles by the amaraorg community', 'like and subscribe', 'see you in the next video',
 ];
+const HALLUCINATIONS = ['thank you', 'thanks', 'you', 'bye', 'okay', 'obrigado', 'thank you very much'];
+const normalize = (t) => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
 
-function makeClient(apiKey) {
-  if (!apiKey) throw new Error('No Groq API key. Add it in Dashboard → Settings.');
-  return new Groq({ apiKey, timeout: 30_000, maxRetries: 1 });
+let server = null; // { baseURL, token: async (force) => Firebase ID token }
+function useServer(s) { server = s; }
+
+// Runs one request; through the server, a rejected (expired) sign-in token is refreshed once.
+async function call(apiKey, fn) {
+  if (apiKey) return fn(new Groq({ apiKey, timeout: 30_000, maxRetries: 1 }));
+  if (!server) throw new Error('Not connected to the MyWisper server');
+  const client = async (force) => new Groq({ apiKey: await server.token(force), baseURL: server.baseURL, timeout: 30_000, maxRetries: 1 });
+  try {
+    return await fn(await client(false));
+  } catch (err) {
+    if (err.status !== 401) throw err;
+    return fn(await client(true));
+  }
+}
+
+/** Short message for the pill / dashboard from a failed request. */
+function errorMessage(err) {
+  const code = err?.error?.code || err?.error?.error?.code;
+  if (code === 'daily_limit') return 'Daily free limit reached';
+  if (code === 'too_fast') return 'Too many requests - wait a minute';
+  if (code === 'paused') return 'MyWisper is paused - try later';
+  if (err?.status === 401 || /sign in/i.test(err?.message || '')) return 'Sign in to MyWisper again';
+  return 'Failed - check internet';
 }
 
 // Whisper's "prompt" is a hint about style + vocabulary (max ~224 tokens, so keep it short).
@@ -45,10 +72,11 @@ async function transcribe({ apiKey, audio, fileName = 'speech.webm', model, lang
   };
   if (language && language !== 'auto') params.language = language;
 
-  const res = await makeClient(apiKey).audio.transcriptions.create(params);
+  const res = await call(apiKey, (c) => c.audio.transcriptions.create(params));
   let text = (res.text || '').trim();
   // "strict" = little or unknown voice, so a typical silence phrase is probably invented.
-  if (strict && HALLUCINATIONS.includes(text.toLowerCase())) text = '';
+  const plain = normalize(text);
+  if (HALLUCINATIONS_ALWAYS.includes(plain) || (strict && HALLUCINATIONS.includes(plain))) text = '';
   if (!/[\p{L}\p{N}]/u.test(text)) text = ''; // only punctuation, e.g. " ."
   return { text, ms: Date.now() - t0 };
 }
@@ -63,13 +91,13 @@ function modelOptions(model) {
 // One chat call with a system prompt and wrapped user text. Returns text + timing + token usage.
 async function chat({ apiKey, model, system, user, temperature, maxTokens = 2048 }) {
   const t0 = Date.now();
-  const res = await makeClient(apiKey).chat.completions.create({
+  const res = await call(apiKey, (c) => c.chat.completions.create({
     model,
     temperature,
     max_completion_tokens: maxTokens,
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     ...modelOptions(model),
-  });
+  }));
   const text = (res.choices?.[0]?.message?.content || '')
     .replace(/<think>[\s\S]*?<\/think>/g, '') // in case a model still shows its thinking
     .replace(/<\/?(dictation|text)>/g, '')
@@ -110,7 +138,7 @@ function transform({ apiKey, system, temperature = 0.3, text, model }) {
 async function matchPrompt({ apiKey, instruction, prompts, model = 'qwen/qwen3.8-27b' }) {
   const t0 = Date.now();
   const list = prompts.map((p) => ({ id: p.id, name: p.name, description: p.description }));
-  const res = await makeClient(apiKey).chat.completions.create({
+  const res = await call(apiKey, (c) => c.chat.completions.create({
     model,
     temperature: 0,
     max_completion_tokens: 300,
@@ -120,7 +148,7 @@ async function matchPrompt({ apiKey, instruction, prompts, model = 'qwen/qwen3.8
       { role: 'user', content: `Saved prompts:\n${JSON.stringify(list)}\n\nInstruction: ${instruction}` },
     ],
     ...modelOptions(model),
-  });
+  }));
   let out = {};
   try { out = JSON.parse(res.choices?.[0]?.message?.content || '{}'); } catch { /* treat as no match */ }
   const id = list.some((p) => p.id === out.id) ? out.id : null;
@@ -139,15 +167,16 @@ function applyReplacements(text, replacements = {}) {
   return out;
 }
 
-/** Checks the key by listing models. Returns { ok, ms, models, error }. */
+/** Checks a Groq key directly (scripts/test-api.js) by listing models. Returns { ok, ms, models, error }. */
 async function testKey(apiKey) {
   const t0 = Date.now();
   try {
-    const list = await makeClient(apiKey).models.list();
+    if (!apiKey) throw new Error('No Groq API key');
+    const list = await call(apiKey, (c) => c.models.list());
     return { ok: true, ms: Date.now() - t0, models: list.data.map((m) => m.id).sort() };
   } catch (err) {
     return { ok: false, ms: Date.now() - t0, error: err.message };
   }
 }
 
-module.exports = { transcribe, cleanup, transform, matchPrompt, applyReplacements, testKey };
+module.exports = { useServer, errorMessage, transcribe, cleanup, transform, matchPrompt, applyReplacements, testKey, HALLUCINATIONS, HALLUCINATIONS_ALWAYS, whisperPrompt };

@@ -26,9 +26,16 @@ Vad.load()
   .then(() => console.log('voice detector ready'))
   .catch((err) => console.error('Voice detector failed to load:', err));
 
-async function getMic() {
+let micOpening = null;
+// Opens the mic once and shares it (live typing and a normal recording may ask at the same moment).
+function getMic() {
   clearTimeout(releaseTimer);
-  if (stream && stream.active) return stream;
+  if (stream && stream.active) return Promise.resolve(stream);
+  micOpening ||= openMic().finally(() => { micOpening = null; });
+  return micOpening;
+}
+
+async function openMic() {
   stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
@@ -150,6 +157,7 @@ window.pillHit = (x, y) => {
   // The idle bar is tiny: any click in its window (including the padding around it) opens the dashboard.
   if (state === 'idle' || state === 'hint') return 'dashboard';
   if (state === 'await') return target.closest('#cancel') ? 'cancel' : null;
+  if (state === 'recording' && 'live' in pill.dataset) return 'stoplive';
   if (state !== 'select') return null;
   const btn = target.closest('button[data-action]');
   if (btn && !menu.hidden) {
@@ -204,20 +212,22 @@ window.mywisper.onRecordStart(async () => {
   try {
     await getMic();
   } catch (err) {
+    if (session?.live) return; // live typing took over and reports mic errors itself
     setView('error', 'Mic blocked');
     window.mywisper.sendAudio({ error: `Microphone error: ${err.message}` });
     session = null;
     return;
   }
-  if (!session || session.id !== id) return; // cancelled while the mic was opening
+  if (!session || session.id !== id || session.live) return; // cancelled while the mic was opening
   if (Vad.ready) session.vad = Vad.createStream();
 
   const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-  session.recorder = recorder;
-  recorder.ondataavailable = (e) => e.data.size && session?.chunks.push(e.data);
+  const mine = session;
+  mine.recorder = recorder;
+  recorder.ondataavailable = (e) => e.data.size && mine.chunks.push(e.data);
   recorder.onstop = async () => {
-    const s = session;
-    session = null;
+    const s = mine;
+    if (session === s) session = null; // a live session may already have taken over
     releaseMicLater();
     if (!s || s.cancelled) return;
     const vad = s.vad ? await s.vad.result() : null;
@@ -236,17 +246,112 @@ window.mywisper.onRecordStart(async () => {
 });
 
 window.mywisper.onRecordStop(() => {
-  if (!session) return;
+  if (!session || session.live) return;
   setView('processing', 'Transcribing');
   if (session.recorder?.state === 'recording') session.recorder.stop();
   else session.stopRequested = true;
 });
 
 window.mywisper.onRecordCancel(() => {
-  if (!session) return;
+  if (!session || session.live) return;
   session.cancelled = true;
   if (session.recorder?.state === 'recording') session.recorder.stop();
   else session = null;
+  releaseMicLater();
+});
+
+// ---------- live typing ----------
+// The voice detector scores every 32 ms frame. A sentence starts at the first speech frame (plus a
+// little audio before it) and ends after a short pause; each sentence goes to main as a WAV clip,
+// which transcribes, cleans and types it while the user keeps talking.
+const LIVE = {
+  PAUSE_MS: 700,         // this much quiet ends a sentence
+  QUIET_PROB: 0.3,       // only frames this unlikely to be speech count as quiet (soft words don't)
+  PREROLL_FRAMES: 32,    // ~1 s of audio kept from before the first clear speech frame (soft starts)
+  MIN_SPEECH_MS: 250,    // shorter "sentences" are coughs or clicks
+  MAX_SENTENCE_MS: 25_000,
+  KEEP_TAIL_MS: 250,     // quiet kept after the last word (trimmed beyond that)
+};
+
+function newSentence() {
+  return { frames: [], preroll: [], speaking: false, speechMs: 0, quietMs: 0, maxProb: 0 };
+}
+
+function liveFrame(s, frame, prob) {
+  s.maxProb = Math.max(s.maxProb || 0, prob);
+  const seg = s.sentence;
+  if (!seg.speaking) {
+    if (prob <= Vad.SPEECH_PROB) {
+      seg.preroll.push(frame);
+      if (seg.preroll.length > LIVE.PREROLL_FRAMES) seg.preroll.shift();
+      return;
+    }
+    Object.assign(seg, { speaking: true, frames: seg.preroll, preroll: [] });
+  }
+  seg.frames.push(frame);
+  seg.maxProb = Math.max(seg.maxProb, prob);
+  if (prob > Vad.SPEECH_PROB) seg.speechMs += 32;
+  if (prob < LIVE.QUIET_PROB) seg.quietMs += 32; else seg.quietMs = 0;
+  if (seg.quietMs >= LIVE.PAUSE_MS || seg.frames.length * 32 >= LIVE.MAX_SENTENCE_MS) sendSentence(s);
+}
+
+function sendSentence(s) {
+  const seg = s.sentence;
+  s.sentence = newSentence();
+  if (!seg.speaking) return;
+  if (seg.speechMs < LIVE.MIN_SPEECH_MS) return console.log(`live: dropped ${seg.frames.length * 32} ms (speech ${seg.speechMs} ms)`);
+  const drop = Math.max(0, Math.floor((seg.quietMs - LIVE.KEEP_TAIL_MS) / 32));
+  const frames = drop ? seg.frames.slice(0, -drop) : seg.frames;
+  console.log(`live: sentence ${s.seq + 1}, ${frames.length * 32} ms, speech ${seg.speechMs} ms, best ${seg.maxProb.toFixed(2)}`);
+  window.mywisper.sendLiveSentence({
+    sessionId: s.id, seq: ++s.seq, audio: toWav(frames), durationSec: (frames.length * 32) / 1000,
+    speechMs: seg.speechMs, vadMaxProb: seg.maxProb,
+  });
+}
+
+// 16 kHz mono float frames → 16-bit PCM WAV bytes.
+function toWav(frames) {
+  const samples = frames.reduce((n, f) => n + f.length, 0);
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const text = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  text(0, 'RIFF'); v.setUint32(4, 36 + samples * 2, true); text(8, 'WAVE');
+  text(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  text(36, 'data'); v.setUint32(40, samples * 2, true);
+  let o = 44;
+  for (const f of frames) for (const x of f) { v.setInt16(o, Math.max(-1, Math.min(1, x)) * 0x7fff, true); o += 2; }
+  return new Uint8Array(buf);
+}
+
+window.mywisper.onLiveStart(async ({ sessionId }) => {
+  const s = { id: sessionId, live: true, startedAt: performance.now(), peak: 0, vad: null, seq: 0, sentence: newSentence() };
+  session = s;
+  levels = new Array(BARS).fill(0);
+  pill.dataset.live = '';
+  setView('recording', 'Live');
+  try {
+    await getMic();
+    if (!Vad.ready) await Vad.load();
+  } catch (err) {
+    window.mywisper.sendLiveSentence({ sessionId, error: `Microphone error: ${err.message}` });
+    return;
+  }
+  if (session !== s) return; // stopped while the mic was opening
+  s.vad = Vad.createStream((frame, prob) => liveFrame(s, frame, prob));
+  console.log('live: listening');
+  requestAnimationFrame(draw);
+});
+
+window.mywisper.onLiveStop(async () => {
+  const s = session;
+  if (!s?.live) return;
+  session = null;
+  delete pill.dataset.live;
+  await s.vad?.result(); // let the detector finish the last frames
+  console.log(`live: stopped, best speech score ${(s.maxProb || 0).toFixed(2)}`);
+  sendSentence(s);       // whatever was being said when the user stopped
+  window.mywisper.sendLiveSentence({ sessionId: s.id, done: true });
   releaseMicLater();
 });
 

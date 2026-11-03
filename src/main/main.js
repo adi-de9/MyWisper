@@ -16,10 +16,13 @@ const { detect } = require('./context');
 const selection = require('./selection');
 const transform = require('./transform');
 const library = require('./library');
+const auth = require('./auth');
+const sync = require('./sync');
+const api = require('./api');
 
 const RENDERER = path.join(__dirname, '..', 'renderer');
 const EDGE_GAP = 6;                 // distance between the pill window and the screen edge / taskbar
-const IDLE_SIZE = { width: 56, height: 23 }; // 40 × 7 bar + page padding
+const IDLE_SIZE = { width: 56, height: 25 }; // 40 × 9 bar + page padding
 const PREVIEW_W = 580;
 const SELECTION_HIDE_MS = 8000;
 const COMMAND_WAIT_MS = 15000;      // how long "Say what to do" waits for Win + Ctrl
@@ -62,6 +65,12 @@ app.on('second-instance', () => openDashboard('overview'));
 
 // Let the pill's audio start without a click.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Testing: MYWISPER_FAKE_MIC=<file.wav> makes that file the microphone (played once from when the mic opens),
+// so tests get the same audio every time without speakers or room noise.
+if (process.env.MYWISPER_FAKE_MIC) {
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-file-for-fake-audio-capture', `${process.env.MYWISPER_FAKE_MIC}%noloop`);
+}
 
 // ---------- the pill: always visible, it only changes size ----------
 // It is never hidden and shown again: on Windows that made clicks stop working (the second-rewrite bug).
@@ -262,7 +271,7 @@ async function processAudio({ audio, durationSec, peak, speechMs, vadMaxProb, er
 
   try {
     const stt = await groq.transcribe({
-      apiKey: cfg.groqApiKey, audio: Buffer.from(audio), fileName: 'speech.webm',
+      audio: Buffer.from(audio), fileName: 'speech.webm',
       model: cfg.sttModel, language: cfg.language, dictionary,
       strict: speechMs == null || speechMs < CLEAR_VOICE_MS, // unclear voice → drop typical made-up phrases
     });
@@ -279,7 +288,7 @@ async function processAudio({ audio, durationSec, peak, speechMs, vadMaxProb, er
     let finalText = stt.text;
     try {
       const llm = await groq.cleanup({
-        apiKey: cfg.groqApiKey, text: stt.text, model: cfg.llmModel, dictionary,
+        text: stt.text, model: cfg.llmModel, dictionary,
         context: cfg.smartFormat ? context : null,
       });
       Object.assign(entry, { llmMs: llm.ms, promptTokens: llm.promptTokens, completionTokens: llm.completionTokens });
@@ -305,7 +314,7 @@ async function processAudio({ audio, durationSec, peak, speechMs, vadMaxProb, er
     entry.error = err.message;
     // Keep whatever we have on the clipboard so nothing is lost.
     if (entry.rawText) clipboard.writeText(entry.cleanText || entry.rawText).catch(() => {});
-    pillMessage(/401|invalid.*key/i.test(err.message) ? 'Bad API key' : 'Failed - check internet', 'error', 2500);
+    pillMessage(groq.errorMessage(err), 'error', 2500);
     if (kind === 'command') {
       pendingCommand = null;
       return;
@@ -320,6 +329,138 @@ async function processAudio({ audio, durationSec, peak, speechMs, vadMaxProb, er
   notifyDashboard();
 }
 
+// ---------- live typing ----------
+// With "Live typing" on, a quick tap of Win + Ctrl starts it: the pill sends every sentence after a
+// short pause; each one is transcribed and cleaned straight away and typed in order while the user
+// keeps talking. A tap of Win + Ctrl, Esc or a click on the pill stops it.
+const LIVE_QUIET_STOP_MS = 60_000;   // stop after a minute without a sentence
+const LIVE_MAX_MS = 15 * 60_000;
+let live = null; // { id, context, typing, sentences, typed, stopping, error, timers }
+let liveCounter = 0;
+
+function startLive() {
+  if (!auth.user()) return needSignIn();
+  const s = { id: ++liveCounter, typing: Promise.resolve(), sentences: 0, typed: 0, stopping: false, error: null,
+    context: winfo.foreground().then(detect).catch(() => null) };
+  live = s;
+  log('live: start');
+  expandPill('live');
+  tray.setRecording(true);
+  pillWin.webContents.send('record:cancel'); // the normal recording that began when the keys went down
+  pillWin.webContents.send('live:start', { sessionId: s.id });
+  s.maxTimer = setTimeout(() => stopLive('15 min limit'), LIVE_MAX_MS);
+  keepLiveAwake(s);
+}
+
+function keepLiveAwake(s) {
+  clearTimeout(s.quietTimer);
+  s.quietTimer = setTimeout(() => stopLive('quiet for a minute'), LIVE_QUIET_STOP_MS);
+}
+
+function stopLive(reason) {
+  const s = live;
+  if (!s || s.stopping) return;
+  s.stopping = true;
+  clearTimeout(s.quietTimer);
+  clearTimeout(s.maxTimer);
+  log(`live: stop (${reason}), ${s.sentences} sentence(s)`);
+  tray.setRecording(false);
+  pillState('processing', 'Typing');
+  pillWin.webContents.send('live:stop');
+  s.doneTimer = setTimeout(() => finishLive(s), 20_000); // safety net if the pill never answers
+}
+
+// All sentences typed: back to the idle bar (or show the error that stopped it).
+function finishLive(s) {
+  clearTimeout(s.doneTimer);
+  if (live !== s) return;
+  live = null;
+  if (s.error) pillMessage(s.error, 'error', 2500);
+  else if (pillMode === 'live') collapsePill();
+}
+
+function onLiveSentence(msg) {
+  const s = live;
+  if (!s || msg.sessionId !== s.id) return;
+  if (msg.error) {
+    log('live:', msg.error);
+    s.error = 'Mic error';
+    stopLive('mic error');
+    return finishLive(s);
+  }
+  if (msg.done) {
+    s.typing = s.typing.then(() => finishLive(s));
+    return;
+  }
+  keepLiveAwake(s);
+  const seq = ++s.sentences;
+  // Transcribe now (in parallel with earlier sentences), but type strictly in the order spoken.
+  const text = liveTranscribe(s, msg, seq);
+  s.typing = s.typing.then(async () => {
+    const t = await text;
+    if (!t) return;
+    const out = s.typed > 0 && !/^[\s.,!?;:)\]]/.test(t) ? ` ${t}` : t;
+    if (NO_PASTE) log(`paste skipped (MYWISPER_NOPASTE): ${out}`);
+    else await pasteText(out);
+    s.typed++;
+  }).catch((err) => log('live typing failed:', err.message));
+}
+
+async function liveTranscribe(s, { audio, durationSec, speechMs, vadMaxProb }, seq) {
+  if (vadMaxProb < NO_VOICE_PROB) return '';
+  const cfg = config.getConfig();
+  const dictionary = config.getDictionary();
+  const context = await s.context;
+  const t0 = Date.now();
+  const entry = {
+    kind: 'dictation', live: true, app: context?.app, category: context?.category,
+    audioSec: +durationSec.toFixed(2), sttModel: cfg.sttModel, llmModel: cfg.llmModel,
+    rawText: '', cleanText: '', sttMs: 0, llmMs: 0, pasteMs: 0, totalMs: 0,
+    promptTokens: 0, completionTokens: 0, words: 0, wpm: 0, costUsd: 0, status: 'ok',
+  };
+  try {
+    const stt = await groq.transcribe({
+      audio: Buffer.from(audio), fileName: 'speech.wav',
+      model: cfg.sttModel, language: cfg.language, dictionary, strict: speechMs < CLEAR_VOICE_MS,
+    });
+    entry.rawText = stt.text;
+    entry.sttMs = stt.ms;
+    if (!stt.text) return '';
+    let text = stt.text;
+    try {
+      const llm = await groq.cleanup({
+        text: stt.text, model: cfg.llmModel, dictionary,
+        context: cfg.smartFormat ? context : null,
+      });
+      Object.assign(entry, { llmMs: llm.ms, promptTokens: llm.promptTokens, completionTokens: llm.completionTokens });
+      if (llm.text) text = llm.text;
+    } catch (err) {
+      entry.status = 'raw'; // cleanup failed → still type what Whisper heard
+      entry.error = `Cleanup failed: ${err.message}`;
+    }
+    text = groq.applyReplacements(text, dictionary.replacements);
+    entry.cleanText = text;
+    log(`live #${seq}: whisper ${entry.sttMs} ms, cleanup ${entry.llmMs} ms: ${text}`);
+    return text;
+  } catch (err) {
+    entry.status = 'error';
+    entry.error = err.message;
+    log(`live #${seq} failed: ${err.message}`);
+    s.error = groq.errorMessage(err);
+    stopLive('error');
+    return '';
+  } finally {
+    entry.totalMs = Date.now() - t0;
+    entry.words = (entry.cleanText || '').split(/\s+/).filter(Boolean).length;
+    entry.wpm = entry.words ? Math.round(entry.words / (durationSec / 60)) : 0;
+    entry.costUsd = estimateCost({ cfg, audioSec: durationSec, ...entry });
+    if (entry.rawText || entry.status === 'error') {
+      history.add(entry);
+      notifyDashboard();
+    }
+  }
+}
+
 // Debug only (used by automated UI tests): logs the screen position (physical pixels) of buttons.
 async function logButtonPositions(win, selector) {
   if (!DEBUG) return;
@@ -330,6 +471,20 @@ async function logButtonPositions(win, selector) {
   const sf = screen.getDisplayMatching(b).scaleFactor;
   for (const r of JSON.parse(json)) trace(`button ${r.id} ${Math.round((b.x + r.x) * sf)} ${Math.round((b.y + r.y) * sf)}`);
 }
+
+// MyWisper needs a Google account (for sync): without one, Win + Ctrl only points to the sign-in screen.
+let signInHintAt = 0;
+function needSignIn() {
+  if (Date.now() - signInHintAt < 3000) return;
+  signInHintAt = Date.now();
+  pillMessage('Sign in to MyWisper first', 'info', 2500);
+  openDashboard('overview');
+}
+
+function sendAccount() {
+  if (dashWin && !dashWin.isDestroyed()) dashWin.webContents.send('auth:changed', accountInfo());
+}
+const accountInfo = () => ({ user: auth.user(), online: auth.isOnline(), sync: sync.status() });
 
 function notifyDashboard() {
   if (dashWin && !dashWin.isDestroyed()) dashWin.webContents.send('history:changed');
@@ -342,6 +497,7 @@ let pendingCommand = null; // { text, fg, timer } while waiting for a spoken ins
 let job = null;            // { promptId, extra, text, fg, instruction, label, canReplace, result }
 
 function onSelection(sel) {
+  if (!auth.user()) return;
   // A short pill message ("Timed out", "No speech heard") never blocks a new selection.
   if (hotkey.recording || !['idle', 'select', 'message'].includes(pillMode) || previewWin?.isVisible()) return;
   if (pillMode === 'message') pillMode = 'idle';
@@ -440,7 +596,7 @@ async function handleCommand(instruction) {
   const prompts = library.list();
   let match = { id: null, extra: instruction };
   try {
-    match = await groq.matchPrompt({ apiKey: config.getConfig().groqApiKey, instruction, prompts });
+    match = await groq.matchPrompt({ instruction, prompts });
   } catch (err) {
     log(`prompt match failed: ${err.message}`);
   }
@@ -499,7 +655,7 @@ async function generate() {
     if (DEBUG) setTimeout(() => logButtonPositions(previewWin, 'button[data-cmd]'), 300);
   } catch (err) {
     log(`${current.promptId || 'custom'} failed: ${err.message}`);
-    sendPreview({ loading: false, status: `Couldn't rewrite: ${err.message}. Check your internet or API key, then try again.`, statusKind: 'bad' });
+    sendPreview({ loading: false, status: `Couldn't rewrite: ${groq.errorMessage(err)}.`, statusKind: 'bad' });
   }
   notifyDashboard();
 }
@@ -574,10 +730,10 @@ function closePreview() {
 }
 
 // ---------- IPC ----------
-function maskKey(k) { return k ? `${k.slice(0, 4)}…${k.slice(-4)}` : ''; }
 
 function registerIpc() {
   ipcMain.on('record:audio', (_e, payload) => processAudio(payload));
+  ipcMain.on('live:sentence', (_e, payload) => onLiveSentence(payload));
   ipcMain.on('pill:size', (_e, size) => {
     if (!size?.width || !size?.height) return;
     pillSize = { width: size.width, height: size.height };
@@ -598,12 +754,11 @@ function registerIpc() {
   ipcMain.handle('dict:save', (_e, d) => config.saveDictionary(d));
 
   ipcMain.handle('config:get', () => {
-    const { groqApiKey, ...rest } = config.getConfig();
-    return { ...rest, hasKey: !!groqApiKey, keyMasked: maskKey(groqApiKey), dataDir: config.dir() };
+    return { ...config.getConfig(), dataDir: config.dir() };
   });
   ipcMain.handle('config:save', (_e, partial) => {
-    const allowed = ['sttModel', 'llmModel', 'language', 'typingWpm', 'groqApiKey', 'pillPosition',
-      'selectionTool', 'excludedApps', 'smartFormat', 'transformModel', 'showIdleLine'];
+    const allowed = ['language', 'typingWpm', 'pillPosition',
+      'selectionTool', 'excludedApps', 'smartFormat', 'liveTyping', 'showIdleLine'];
     const clean = Object.fromEntries(Object.entries(partial).filter(([k, v]) => allowed.includes(k) && v !== undefined && v !== ''));
     config.saveConfig(clean);
     if ('pillPosition' in clean) {
@@ -613,7 +768,7 @@ function registerIpc() {
     if ('showIdleLine' in clean) refreshIdleBar();
     return true;
   });
-  ipcMain.handle('api:test', (_e, key) => groq.testKey(key || config.getConfig().groqApiKey));
+  ipcMain.handle('usage:get', () => api.usage().catch(() => null));
   ipcMain.handle('clipboard:copy', (_e, text) => clipboard.writeText(text));
 
   // prompt library
@@ -624,6 +779,25 @@ function registerIpc() {
   ipcMain.handle('prompts:remove', (_e, id) => changed(library.remove(id)));
   ipcMain.handle('prompts:reset', (_e, id) => changed(library.reset(id)));
   ipcMain.handle('eod:today', () => createTodayEod());
+  ipcMain.handle('auth:get', () => accountInfo());
+  ipcMain.handle('auth:signin', async () => {
+    try {
+      await auth.signIn();
+      log(`signed in as ${auth.user()?.email}`);
+      return { ok: true };
+    } catch (err) {
+      log('sign-in failed:', err.message);
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sync:deleteCloud', async () => {
+    try { return { ok: true, count: await sync.deleteCloudData() }; } catch (err) { return { ok: false, error: err.message }; }
+  });
+  ipcMain.handle('auth:signout', async () => {
+    await auth.signOut();
+    log('signed out');
+    return true;
+  });
 }
 
 // ---------- start ----------
@@ -633,7 +807,16 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === 'media');
 
   config.getConfig();
+  groq.useServer({ baseURL: api.BASE, token: auth.idToken }); // Groq goes through the MyWisper server
+  api.warmUp();
   registerIpc();
+  sync.init({
+    logger: log,
+    statusChanged: sendAccount,
+    remote: (name) => { notifyDashboard(); if (name === 'prompts') sendPillMenu(); },
+  });
+  auth.onChange(sendAccount);
+  if (!auth.restore()) log('not signed in');
   winfo.start();
   createPill();
   createPreview();
@@ -645,6 +828,8 @@ app.whenReady().then(() => {
   screen.on('display-removed', placePill);
 
   hotkey.on('start', () => {
+    if (live) return;
+    if (!auth.user()) return needSignIn(); // live typing is on: this press only stops it (when the keys go up)
     // Waiting for "Say what to do"? Then this recording is the instruction, not text to type.
     recordingKind = pillMode === 'await' && pendingCommand ? 'command' : 'dictation';
     log(`hotkey: start (${recordingKind})`);
@@ -659,11 +844,22 @@ app.whenReady().then(() => {
     pillWin.webContents.send('record:start');
   });
   hotkey.on('stop', () => {
+    if (live) return stopLive('Win + Ctrl');
     log('hotkey: stop');
     tray.setRecording(false);
     pillWin.webContents.send('record:stop');
   });
+  // A quick tap: starts/stops live typing when that's on; otherwise it's just a too-short press.
+  hotkey.on('tap', () => {
+    if (live) return stopLive('Win + Ctrl');
+    if (recordingKind === 'dictation' && config.getConfig().liveTyping) return startLive();
+    onHotkeyCancel();
+  });
   hotkey.on('cancel', () => {
+    if (live) return stopLive('Win + Ctrl + another key');
+    onHotkeyCancel();
+  });
+  function onHotkeyCancel() {
     log('hotkey: cancel');
     tray.setRecording(false);
     pillWin.webContents.send('record:cancel');
@@ -675,7 +871,7 @@ app.whenReady().then(() => {
     } else {
       collapsePill();
     }
-  });
+  }
   hotkey.start();
 
   selection.on('selection', onSelection);
@@ -693,6 +889,7 @@ app.whenReady().then(() => {
         if (hit === 'dashboard') openDashboard('overview');
         else if (hit === 'toggle') scheduleSelectionHide(SELECTION_HIDE_MS);
         else if (hit === 'cancel') cancelCommand('cancelled');
+        else if (hit === 'stoplive') stopLive('pill click');
         else if (hit === 'voice') startVoiceCommand();
         else if (hit) runMenuPrompt(hit);
       } else if (hit && hit !== 'toggle-original') {
@@ -711,6 +908,7 @@ app.whenReady().then(() => {
     const esc = e.keycode === 1;
     if (pillMode === 'select') endSelectionMode(`key ${e.keycode}`);
     if (esc && pillMode === 'await') cancelCommand('cancelled');
+    if (esc && live) stopLive('Esc');
     if (esc && previewWin?.isVisible()) closePreview();
   });
   selection.isOverOwnUi = () => cursorOverPill() || cursorOver(previewWin);
@@ -722,7 +920,7 @@ app.whenReady().then(() => {
   if (process.env.MYWISPER_SMOKE) return runSmokeTest(process.env.MYWISPER_SMOKE);
   // Testing: build today's EOD shortly after start (same function as the tray item / dashboard button).
   if (DEBUG && process.env.MYWISPER_TEST_EOD) setTimeout(createTodayEod, 3000);
-  if (!config.getConfig().groqApiKey) openDashboard('settings');
+  if (!auth.user()) openDashboard('overview'); // shows the sign-in screen
 });
 
 // Self-test (npm run smoke): screenshots of every pill state, the preview views and each dashboard

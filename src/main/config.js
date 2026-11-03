@@ -4,14 +4,14 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_CONFIG = {
-  groqApiKey: '',
   sttModel: 'whisper-large-v3',
   llmModel: 'qwen/qwen3.8-27b',
   language: 'auto',            // "auto" | "hi" | "en" (hint for Whisper)
   typingWpm: 40,               // used for "time saved" on the dashboard
   pillPosition: 'bottom',      // "bottom" | "top" of the screen
   showIdleLine: true,          // the small bar that is always visible (hidden in fullscreen apps)
-  smartFormat: true,           // adapt dictation formatting to the app (email, chat, AI prompt…)
+  smartFormat: true,
+  liveTyping: false,           // tap Win + Ctrl: each sentence is typed when you pause (hold = type at the end)           // adapt dictation formatting to the app (email, chat, AI prompt…)
   selectionTool: true,         // show the ✨ MyWisper pill when text is selected
   // Apps where the selection pill never appears (process names). Terminals: Ctrl+C would stop programs.
   excludedApps: ['WindowsTerminal', 'cmd', 'powershell', 'pwsh', 'conhost'],
@@ -51,9 +51,12 @@ function getConfig() {
   if (config) return config;
   const saved = readJson(configFile(), {});
   config = { ...DEFAULT_CONFIG, ...saved, prices: { ...DEFAULT_CONFIG.prices, ...(saved.prices || {}) } };
-  // First run: take the key from .env (only exists while developing).
-  if (!config.groqApiKey && process.env.GROQ_API_KEY) {
-    config.groqApiKey = process.env.GROQ_API_KEY;
+  // Older versions kept the user's own Groq key here; the server holds the key now, so forget it.
+  // The models are no longer a user choice either (MyWisper pays for them): always the defaults.
+  const fixed = { sttModel: DEFAULT_CONFIG.sttModel, llmModel: DEFAULT_CONFIG.llmModel, transformModel: DEFAULT_CONFIG.transformModel };
+  if ('groqApiKey' in config || Object.entries(fixed).some(([k, v]) => config[k] !== v)) {
+    delete config.groqApiKey;
+    Object.assign(config, fixed);
     writeJson(configFile(), config);
   }
   if (!fs.existsSync(configFile())) writeJson(configFile(), config);
@@ -78,13 +81,28 @@ function getDictionary() {
   return dictionary;
 }
 
+let dictChanged = () => {}; // set by sync.js
+
 function saveDictionary(dict) {
   dictionary = {
     words: [...new Set((dict.words || []).map((w) => w.trim()).filter(Boolean))],
     replacements: dict.replacements || {},
+    updatedAt: Date.now(),
   };
   writeJson(dictFile(), dictionary);
+  dictChanged(dictionary);
   return dictionary;
 }
 
-module.exports = { getConfig, saveConfig, getDictionary, saveDictionary, dir };
+/** The dictionary from another device (Firestore): the newer one wins. Returns true if it changed. */
+function applyRemoteDictionary(doc) {
+  if ((getDictionary().updatedAt || 0) >= (doc.updatedAt || 0)) return false;
+  dictionary = { words: doc.words || [], replacements: doc.replacements || {}, updatedAt: doc.updatedAt };
+  writeJson(dictFile(), dictionary);
+  return true;
+}
+
+module.exports = {
+  getConfig, saveConfig, getDictionary, saveDictionary, applyRemoteDictionary, dir,
+  onDictionaryChange: (fn) => { dictChanged = fn; },
+};

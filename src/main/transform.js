@@ -28,7 +28,6 @@ async function run(job) {
   const cfg = config.getConfig();
   const entry = job.promptId ? library.get(job.promptId) : null;
   const out = await groq.transform({
-    apiKey: cfg.groqApiKey,
     system: library.render(entry, job.extra),
     temperature: entry?.temperature ?? 0.3,
     text: job.text,

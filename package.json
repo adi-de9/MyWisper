@@ -1,7 +1,7 @@
 {
   "name": "mywisper",
   "productName": "MyWisper",
-  "version": "1.4.1",
+  "version": "1.7.0",
   "description": "Hold Win+Ctrl, speak, release - voice typing into any app (Groq Whisper + LLM cleanup).",
   "main": "src/main/main.js",
   "author": "Aditya",
@@ -13,8 +13,16 @@
     "smoke": "node scripts/smoke.js",
     "test:api": "node scripts/test-api.js",
     "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-icons.ps1",
-    "dist": "node scripts/build-helper.js && electron-builder --win nsis",
-    "build:helper": "node scripts/build-helper.js"
+    "dist": "node scripts/build-helper.js && node scripts/bake-secrets.js && electron-builder --win nsis",
+    "build:helper": "node scripts/build-helper.js",
+    "android": "cd android && .\\gradlew.bat assembleDebug",
+    "android:apk": "cd android && .\\gradlew.bat assembleRelease && node -e \"require('fs').mkdirSync('../dist',{recursive:true});require('fs').copyFileSync('app/build/outputs/apk/release/app-release.apk','../dist/MyWisper-android.apk')\"",
+    "mobile:prompts": "node scripts/export-mobile-prompts.js",
+    "android:install": "adb install -r dist/MyWisper-android.apk",
+    "test:rules": "set \"PATH=C:\\Program Files\\Android\\Android Studio\\jbr\\bin;%PATH%\" && firebase emulators:exec --only firestore --project demo-mywisper \"node scripts/test-rules.js\"",
+    "android:aab": "cd android && .\\gradlew.bat bundleRelease && node -e \"require('fs').mkdirSync('../dist',{recursive:true});require('fs').copyFileSync('app/build/outputs/bundle/release/app-release.aab','../dist/MyWisper-android.aab')\"",
+    "test:functions": "cd functions && npm test",
+    "deploy:server": "firebase deploy --only functions,firestore:rules --project mywisper-c041c"
   },
   "build": {
     "appId": "com.aditya.mywisper",
@@ -50,12 +58,15 @@
   "dependencies": {
     "chart.js": "^4.5.1",
     "dotenv": "^18.0.4",
+    "firebase": "^12.19.0",
     "groq-sdk": "^1.6.0",
     "onnxruntime-web": "^1.30.0",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "electron": "^44.4.5",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "firebase-tools": "^15.32.1"
   }
 }

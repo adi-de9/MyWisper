@@ -7,6 +7,7 @@ const { DEFAULT_PROMPTS, render, todayLabel } = require('./prompts');
 
 const file = () => path.join(dir(), 'prompts.json');
 let saved = null; // { entries: [...] } exactly as on disk
+let changed = () => {}; // set by sync.js: called with an entry after a local change
 
 function load() {
   if (saved) return saved;
@@ -18,6 +19,16 @@ function load() {
 function persist() {
   fs.mkdirSync(dir(), { recursive: true });
   fs.writeFileSync(file(), JSON.stringify(saved, null, 2));
+}
+
+// Saves one entry (stamped with updatedAt) and tells sync about it.
+function put(entry) {
+  const e = { ...entry, updatedAt: Date.now() };
+  const i = saved.entries.findIndex((x) => x.id === e.id);
+  if (i >= 0) saved.entries[i] = e; else saved.entries.push(e);
+  persist();
+  changed(e);
+  return e;
 }
 
 /**
@@ -61,28 +72,23 @@ function save(entry) {
     pinned: !!entry.pinned,
   };
   if (entry.temperature !== undefined) clean.temperature = Number(entry.temperature) || 0;
-  const i = saved.entries.findIndex((e) => e.id === id);
-  if (i >= 0) saved.entries[i] = { ...saved.entries[i], ...clean };
-  else saved.entries.push(clean);
-  persist();
+  const old = saved.entries.find((e) => e.id === id);
+  put({ ...(old?.deleted ? {} : old), ...clean, deleted: false });
   return get(id);
 }
 
 /** Only changes the "Show in menu" switch. */
 function setPinned(id, pinned) {
   load();
-  const i = saved.entries.findIndex((e) => e.id === id);
-  if (i >= 0) saved.entries[i].pinned = !!pinned;
-  else saved.entries.push({ id, pinned: !!pinned });
-  persist();
+  const old = saved.entries.find((e) => e.id === id) || { id };
+  put({ ...old, pinned: !!pinned });
 }
 
 /** Deletes a user's own prompt. Built-ins can't be deleted, only reset. */
 function remove(id) {
   load();
   if (DEFAULT_PROMPTS.some((d) => d.id === id)) return false;
-  saved.entries = saved.entries.filter((e) => e.id !== id);
-  persist();
+  put({ id, deleted: true }); // remembered, so other devices delete it too
   return true;
 }
 
@@ -90,10 +96,26 @@ function remove(id) {
 function reset(id) {
   load();
   const e = saved.entries.find((x) => x.id === id);
-  saved.entries = saved.entries.filter((x) => x.id !== id);
-  if (e?.pinned !== undefined) saved.entries.push({ id, pinned: e.pinned });
-  persist();
+  put(e?.pinned !== undefined ? { id, pinned: e.pinned } : { id });
   return get(id);
 }
 
-module.exports = { list, get, save, setPinned, remove, reset, render, todayLabel };
+/** A change from another device (Firestore): the newer version wins. Returns true if it changed anything. */
+function applyRemote(doc) {
+  load();
+  const i = saved.entries.findIndex((x) => x.id === doc.id);
+  if (i >= 0 && (saved.entries[i].updatedAt || 0) >= (doc.updatedAt || 0)) return false;
+  if (i >= 0) saved.entries[i] = doc; else saved.entries.push(doc);
+  persist();
+  return true;
+}
+
+/** Entries changed after a time (for the first upload and catch-up after being offline). */
+function changesSince(ms) {
+  return load().entries.map((e) => (e.updatedAt ? e : { ...e, updatedAt: 1 })).filter((e) => e.updatedAt > ms);
+}
+
+module.exports = {
+  list, get, save, setPinned, remove, reset, render, todayLabel, applyRemote, changesSince,
+  onChange: (fn) => { changed = fn; },
+};

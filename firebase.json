@@ -1,0 +1,5 @@
+{
+  "firestore": { "rules": "firebase/firestore.rules" },
+  "functions": [{ "source": "functions", "codebase": "default", "ignore": ["node_modules", "test", ".git", "*.log"] }],
+  "emulators": { "firestore": { "port": 8085 }, "ui": { "enabled": false }, "singleProjectMode": true }
+}

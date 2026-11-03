@@ -22,7 +22,8 @@ const Vad = (() => {
   }
 
   // One stream per recording: push 512-sample frames (16 kHz), then ask for the result.
-  function createStream() {
+  // onFrame(frame, prob) is called for every frame in order (live typing uses it to find pauses).
+  function createStream(onFrame) {
     let state = new ort.Tensor('float32', new Float32Array(2 * 128), [2, 1, 128]);
     const sr = new ort.Tensor('int64', BigInt64Array.from([16000n]), []);
     let queue = Promise.resolve();
@@ -36,6 +37,7 @@ const Vad = (() => {
           const p = out.output.data[0];
           maxProb = Math.max(maxProb, p);
           if (p > SPEECH_PROB) speechMs += 32;
+          onFrame?.(frame, p);
         }).catch(() => {});
       },
       async result() {
@@ -45,5 +47,5 @@ const Vad = (() => {
     };
   }
 
-  return { load, createStream, FRAME, get ready() { return !!session; } };
+  return { load, createStream, FRAME, SPEECH_PROB, get ready() { return !!session; } };
 })();

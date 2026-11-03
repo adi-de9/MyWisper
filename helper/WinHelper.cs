@@ -3,7 +3,7 @@
 //
 // Protocol: one command per line on stdin, one JSON line per answer on stdout.
 //   "fg <id>"   → {"id":1,"process":"chrome","title":"Inbox - Gmail","x":0,"y":0,"w":1536,"h":816}
-//   "sel <id>"  → {"id":2,"supported":true,"text":"the selected text"}
+//   "sel <id>"  → {"id":2,"supported":true,"text":"the selected text","editable":true}
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -88,31 +88,70 @@ class WinHelper
 
     // Reads the selection with UI Automation. Some apps hang or don't support it, so this runs
     // on its own thread with a time limit; "supported":false means "use Ctrl+C instead".
+    // "editable" says whether keyboard focus is in a field you can type in (text box, editor, compose box),
+    // so the Rewrite pill doesn't pop up for text selected on a web page, a button, a file list…
     static string Selection(string id)
     {
         string text = null;
         bool supported = false;
+        bool? editable = null; // null = UI Automation couldn't tell; the caret decides
         var worker = new Thread(() =>
         {
             try
             {
                 AutomationElement el = AutomationElement.FocusedElement;
+                if (el == null) return;
                 object pattern;
-                if (el != null && el.TryGetCurrentPattern(TextPattern.Pattern, out pattern))
+                if (el.TryGetCurrentPattern(ValuePattern.Pattern, out pattern))
+                    editable = !((ValuePattern)pattern).Current.IsReadOnly;
+                else if (el.Current.ControlType == ControlType.Edit)
+                    editable = true;
+                if (el.TryGetCurrentPattern(TextPattern.Pattern, out pattern))
                 {
                     var sb = new StringBuilder();
-                    foreach (TextPatternRange range in ((TextPattern)pattern).GetSelection())
+                    TextPatternRange[] ranges = ((TextPattern)pattern).GetSelection();
+                    foreach (TextPatternRange range in ranges)
                         sb.Append(range.GetText(-1));
                     text = sb.ToString();
                     supported = true;
+                    // Rich editors (contenteditable in browsers: Gmail, Slack, ChatGPT…) have no ValuePattern,
+                    // but their text reports whether it is read-only.
+                    if (editable == null)
+                    {
+                        TextPatternRange r = ranges.Length > 0 ? ranges[0] : ((TextPattern)pattern).DocumentRange;
+                        object ro = r.GetAttributeValue(TextPattern.IsReadOnlyAttribute);
+                        if (ro is bool) editable = !(bool)ro;
+                    }
                 }
             }
             catch { }
         });
         worker.IsBackground = true;
         worker.Start();
-        if (!worker.Join(400)) return "{\"id\":" + id + ",\"supported\":false,\"timeout\":true}";
-        return "{\"id\":" + id + ",\"supported\":" + (supported ? "true" : "false") + ",\"text\":" + Json(text ?? "") + "}";
+        bool finished = worker.Join(400);
+        // Editors (Notepad, Word, RichEdit) and Chromium/Electron text fields show a system caret;
+        // web page text, buttons and lists don't.
+        bool isEditable = (finished ? editable : null) ?? HasCaret();
+        string edit = ",\"editable\":" + (isEditable ? "true" : "false");
+        if (!finished) return "{\"id\":" + id + ",\"supported\":false,\"timeout\":true" + edit + "}";
+        return "{\"id\":" + id + ",\"supported\":" + (supported ? "true" : "false") + ",\"text\":" + Json(text ?? "") + edit + "}";
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct GUITHREADINFO
+    {
+        public int cbSize, flags;
+        public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+        public RECT rcCaret;
+    }
+    [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
+
+    static bool HasCaret()
+    {
+        uint pid;
+        uint thread = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf(typeof(GUITHREADINFO)) };
+        return thread != 0 && GetGUIThreadInfo(thread, ref info) && info.hwndCaret != IntPtr.Zero;
     }
 
     static void Write(string json)

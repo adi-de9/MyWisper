@@ -19,6 +19,11 @@ code { font-size: 12px; padding: 1px 6px; border-radius: 5px; background: var(--
 .hint { display: flex; align-items: center; gap: 5px; }
 .key-status { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px; }
 .key-status .dot { width: 7px; height: 7px; border-radius: 50%; }
+.usage-bar { height: 6px; border-radius: 3px; background: var(--bg-3); overflow: hidden; margin-top: 12px; }
+.usage-bar span { display: block; height: 100%; width: 0; background: var(--fg); transition: width .3s ease; }
+.usage-bar.full span { background: var(--red); }
+.free-today b { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.free-today b.full { color: var(--red); }
 .tabs { display: flex; gap: 4px; padding: 0 16px; }
 .tabs button { all: unset; cursor: pointer; position: relative; padding: 10px 10px 12px; font-size: 13.5px; color: var(--fg-2); border-radius: 6px; }
 .tabs button:hover { color: var(--fg); }
@@ -192,3 +197,33 @@ table.repl td:last-child { text-align: right; width: 1%; }
 textarea { font: 400 12.5px/1.6 var(--font-mono); color: var(--fg); background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 10px 12px; resize: vertical; min-height: 180px; }
 textarea:focus { outline: none; border-color: var(--fg-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 12%, transparent); }
 .hint { color: var(--fg-3); font-size: 12.5px; margin-top: 8px; }
+
+/* ---------- account + sign-in ---------- */
+.account { all: unset; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 4px; border: 1px solid var(--line-2);
+  border-radius: 999px; cursor: pointer; font-size: 12.5px; color: var(--fg-2); }
+.account:hover { background: var(--bg-3); color: var(--fg); }
+.avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--invert-bg) center/cover no-repeat; color: var(--invert-fg);
+  display: grid; place-items: center; font: 600 11px/1 var(--font-sans); }
+.sync-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-3); }
+.sync-dot.on { background: var(--green); }
+.bar-right { position: relative; }
+.account-menu { position: absolute; right: 0; top: 40px; width: 260px; padding: 14px; border: 1px solid var(--line-2); border-radius: var(--radius-lg);
+  background: var(--bg); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); z-index: 20; }
+.account-menu .who { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.account-menu .who span, .account-menu p { color: var(--fg-2); font-size: 12.5px; margin: 0 0 12px; }
+.account-menu .btn { width: 100%; }
+.signin { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: var(--bg);
+  background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 22px 22px; }
+.signin-card { width: 360px; padding: 36px 32px; border: 1px solid var(--line-2); border-radius: 16px; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; }
+.signin-card .mark { width: 34px; height: 34px; padding: 8px; border-radius: 10px; background: var(--invert-bg); color: var(--invert-fg);
+  fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.signin-card h1 { font-size: 20px; letter-spacing: -0.02em; margin: 8px 0 0; }
+.signin-card p { color: var(--fg-2); margin: 0 0 14px; font-size: 13.5px; }
+.btn.google { width: 100%; height: 42px; gap: 10px; background: var(--invert-bg); color: var(--invert-fg); }
+.btn.google svg { width: 18px; height: 18px; }
+.btn.google[disabled] { opacity: .6; cursor: default; }
+.signin-status { min-height: 18px; font-size: 12.5px; color: var(--fg-2); }
+.signin-status.error { color: var(--red); }
+.account-menu .btn + .btn { margin-top: 8px; }
+.sync-dot.warn { background: var(--red); }

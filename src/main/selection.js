@@ -1,5 +1,6 @@
 // Notices when the user has probably just selected text in any app, and emits "selection".
-// Signals: mouse drag, double/triple click, Ctrl+A, Shift+arrow/Home/End.
+// Signals: mouse drag, double/triple click, Ctrl+A, Shift+arrow/Home/End, and only while
+// keyboard focus is in an editable text field (see "editable" in helper/WinHelper.cs).
 // Also emits "mousedown" and "keydown" so the main process can hide the pill again.
 const { EventEmitter } = require('events');
 const { uIOhook, UiohookKey } = require('uiohook-napi');
@@ -90,10 +91,12 @@ class Selection extends EventEmitter {
     if (dragged && from && from.y - fg.y < TITLE_BAR_PX) return; // dragging the window, not text
 
     // Ask the app directly (UI Automation). Many apps support it; others fall back to Ctrl+C later.
-    // MYWISPER_NO_UIA=1 (testing) pretends the app has no UI Automation, to exercise the Ctrl+C path.
-    const sel = process.env.MYWISPER_NO_UIA ? { supported: false } : await winfo.selectedText();
-    const text = sel?.supported ? sel.text : null;
+    const sel = await winfo.selectedText();
     debug('check: UI Automation', JSON.stringify(sel)?.slice(0, 120));
+    // Only text selected inside a field you can type in: not web page text, buttons, lists…
+    if (!sel || sel.editable !== true) return;
+    // MYWISPER_NO_UIA=1 (testing) ignores the UI Automation text, to exercise the Ctrl+C path.
+    const text = sel.supported && !process.env.MYWISPER_NO_UIA ? sel.text : null;
     if (text !== null && !text.trim() && RELIABLE_UIA.includes(proc)) return;
     this.emit('selection', { fg, text: text && text.trim() ? text : null });
   }
